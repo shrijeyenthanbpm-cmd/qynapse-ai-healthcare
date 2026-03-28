@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import cv2
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from keras.models import load_model
 import requests
 import os
 from reportlab.lib.pagesizes import letter
@@ -50,7 +50,7 @@ body {
 """, unsafe_allow_html=True)
 
 # ---------- LOAD MODEL ----------
-model = load_model("brain_tumor_model.h5")
+model = load_model("brain_tumor_model.h5", compile=False)
 IMG_SIZE = 224
 
 # ---------- API ----------

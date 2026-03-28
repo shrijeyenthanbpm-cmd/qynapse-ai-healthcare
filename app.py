@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import cv2
 import tensorflow as tf
-import keras
+from tensorflow.keras.models import load_model
 import requests
 import os
 from reportlab.lib.pagesizes import letter
@@ -13,7 +13,7 @@ import tempfile
 # ---------- CONFIG ----------
 st.set_page_config(page_title="Qynapse AI", layout="wide")
 
-# ---------- STYLE ----------
+# ---------- PREMIUM UI ----------
 st.markdown("""
 <style>
 body {
@@ -42,10 +42,10 @@ body {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- LOAD MODEL SAFE ----------
+# ---------- LOAD MODEL SAFELY ----------
 model = None
 try:
-    model = keras.models.load_model("brain_tumor_model.h5", compile=False)
+    model = load_model("brain_tumor_model.h5", compile=False)
 except Exception as e:
     st.error("⚠️ Model failed to load. Check compatibility.")
     st.stop()
@@ -172,7 +172,7 @@ elif st.session_state.page == "dashboard":
                 st.session_state.page = "coming"
             st.rerun()
 
-# ---------- COMING ----------
+# ---------- COMING SOON ----------
 elif st.session_state.page == "coming":
 
     st.title("🚧 Research in Progress")
@@ -182,7 +182,7 @@ elif st.session_state.page == "coming":
         st.session_state.page = "dashboard"
         st.rerun()
 
-# ---------- BRAIN ----------
+# ---------- BRAIN MODULE ----------
 elif st.session_state.page == "brain":
 
     st.title("🧠 Brain Tumor Detection")
@@ -195,70 +195,85 @@ elif st.session_state.page == "brain":
 
     def gradcam(img_array):
         try:
-            last = model.layers[-1]
-            grad_model = tf.keras.models.Model([model.inputs],[last.output,model.output])
+            last_conv = None
+            for layer in reversed(model.layers):
+                if "conv" in layer.name.lower():
+                    last_conv = layer
+                    break
+
+            if last_conv is None:
+                return None
+
+            grad_model = tf.keras.models.Model(
+                [model.inputs],
+                [last_conv.output, model.output]
+            )
 
             with tf.GradientTape() as tape:
-                conv, pred = grad_model(img_array)
-                loss = pred[:,0]
+                conv_outputs, predictions = grad_model(img_array)
+                loss = predictions[:, 0]
 
-            grads = tape.gradient(loss, conv)
-            pooled = tf.reduce_mean(grads, axis=(0,1,2))
-            conv = conv[0]
+            grads = tape.gradient(loss, conv_outputs)
+            pooled_grads = tf.reduce_mean(grads, axis=(0,1,2))
+            conv_outputs = conv_outputs[0]
 
-            heatmap = conv @ pooled[..., tf.newaxis]
+            heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
             heatmap = tf.squeeze(heatmap)
-            heatmap = np.maximum(heatmap,0)/(np.max(heatmap)+1e-8)
+            heatmap = np.maximum(heatmap,0) / (np.max(heatmap)+1e-8)
+
             return heatmap
         except:
             return None
 
-    def pdf(result, conf):
-        path = tempfile.NamedTemporaryFile(delete=False,suffix=".pdf").name
+    def generate_pdf(result, conf):
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
         doc = SimpleDocTemplate(path, pagesize=letter)
-        style = getSampleStyleSheet()
+        styles = getSampleStyleSheet()
 
         content = [
-            Paragraph("Brain Tumor Report", style['Title']),
+            Paragraph("Brain Tumor Detection Report", styles['Title']),
             Spacer(1,20),
-            Paragraph(f"Result: {result}", style['Normal']),
-            Paragraph(f"Confidence: {conf:.2f}%", style['Normal'])
+            Paragraph(f"Result: {result}", styles['Normal']),
+            Paragraph(f"Confidence: {conf:.2f}%", styles['Normal'])
         ]
+
         doc.build(content)
         return path
 
     if file:
-        bytes_data = np.asarray(bytearray(file.read()),dtype=np.uint8)
-        img = cv2.imdecode(bytes_data,1)
+        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
 
-        col1,col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
         with col1:
-            st.image(img,use_container_width=True)
+            st.image(img, use_container_width=True)
 
         with col2:
-            with st.spinner("Analyzing..."):
-                img_r = cv2.resize(img,(IMG_SIZE,IMG_SIZE))/255.0
-                img_in = np.reshape(img_r,(1,IMG_SIZE,IMG_SIZE,3))
+            with st.spinner("Analyzing MRI..."):
+                img_r = cv2.resize(img, (IMG_SIZE, IMG_SIZE)) / 255.0
+                img_input = np.reshape(img_r, (1, IMG_SIZE, IMG_SIZE, 3))
 
-                pred = model.predict(img_in)[0][0]
-                conf = pred*100
+                prediction = model.predict(img_input)[0][0]
+                confidence = prediction * 100
 
-            if pred>0.5:
-                result="Tumor Detected"
-                st.error(f"{result} ❌ ({conf:.2f}%)")
+            if prediction > 0.5:
+                result = "Tumor Detected"
+                st.error(f"{result} ❌ ({confidence:.2f}%)")
             else:
-                result="No Tumor"
-                st.success(f"{result} ✅ ({100-conf:.2f}%)")
+                result = "No Tumor"
+                st.success(f"{result} ✅ ({100-confidence:.2f}%)")
 
-        heat = gradcam(img_in)
-        if heat is not None:
-            heat = cv2.resize(heat,(img.shape[1],img.shape[0]))
-            heat = np.uint8(255*heat)
-            heat = cv2.applyColorMap(heat,cv2.COLORMAP_JET)
-            super = heat*0.4 + img
-            st.image(super.astype("uint8"), caption="🔥 AI Focus Area", use_container_width=True)
+        heatmap = gradcam(img_input)
+        if heatmap is not None:
+            heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+            heatmap = np.uint8(255 * heatmap)
+            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
-        path = pdf(result,conf)
-        with open(path,"rb") as f:
-            st.download_button("📄 Download Report",f,"report.pdf")
+            superimposed = heatmap * 0.4 + img
+            st.image(superimposed.astype("uint8"), caption="🔥 AI Focus Area", use_container_width=True)
+
+        pdf_path = generate_pdf(result, confidence)
+
+        with open(pdf_path, "rb") as f:
+            st.download_button("📄 Download Report", f, "report.pdf")

@@ -42,16 +42,13 @@ body {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- SAFE MODEL LOAD ----------
-@st.cache_resource
-def load_my_model():
-    try:
-        model = load_model("brain_tumor_model.h5", compile=False)
-        return model
-    except Exception as e:
-        return None
+# ---------- LOAD MODEL (FIXED) ----------
+try:
+    model = load_model("brain_tumor_model.h5")
+except Exception as e:
+    st.error(f"❌ Model Load Error: {e}")
+    st.stop()
 
-model = load_my_model()
 IMG_SIZE = 224
 
 # ---------- API ----------
@@ -189,12 +186,6 @@ elif st.session_state.page == "brain":
         st.session_state.page = "dashboard"
         st.rerun()
 
-    # 🔥 MODEL SAFETY CHECK
-    if model is None:
-        st.error("❌ Model failed to load.")
-        st.info("👉 Convert .h5 → .keras for compatibility")
-        st.stop()
-
     file = st.file_uploader("Upload MRI", type=["jpg","png","jpeg"])
 
     def preprocess(img):
@@ -202,6 +193,7 @@ elif st.session_state.page == "brain":
         img = img / 255.0
         return np.reshape(img, (1, IMG_SIZE, IMG_SIZE, 3))
 
+    # 🔥 FIXED GRADCAM
     def gradcam(img_array):
         try:
             last_conv = None
@@ -210,9 +202,6 @@ elif st.session_state.page == "brain":
                     last_conv = layer
                     break
 
-            if last_conv is None:
-                return None
-
             grad_model = tf.keras.models.Model(
                 [model.inputs],
                 [last_conv.output, model.output]
@@ -220,7 +209,7 @@ elif st.session_state.page == "brain":
 
             with tf.GradientTape() as tape:
                 conv_outputs, predictions = grad_model(img_array)
-                loss = predictions[:, 0]
+                loss = predictions[:, tf.argmax(predictions[0])]
 
             grads = tape.gradient(loss, conv_outputs)
             pooled_grads = tf.reduce_mean(grads, axis=(0,1,2))
@@ -250,43 +239,46 @@ elif st.session_state.page == "brain":
         return path
 
     if file:
-        try:
-            file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-            img = cv2.imdecode(file_bytes, 1)
+        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
 
-            col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-            with col1:
-                st.image(img, use_container_width=True)
+        with col1:
+            st.image(img, use_container_width=True)
 
-            with col2:
-                with st.spinner("Analyzing MRI..."):
-                    img_input = preprocess(img)
-                    prediction = float(model.predict(img_input)[0][0])
-                    confidence = prediction * 100
+        with col2:
+            with st.spinner("🧠 AI analyzing MRI..."):
+                img_input = preprocess(img)
+                pred = model.predict(img_input)
+                pred = float(pred.flatten()[0])
 
-                if prediction > 0.5:
-                    result = "Tumor Detected"
-                    st.error(f"{result} ❌ ({confidence:.2f}%)")
-                else:
-                    result = "No Tumor"
-                    st.success(f"{result} ✅ ({100-confidence:.2f}%)")
+                # 🔥 FIXED LOGIC (REVERSED)
+                confidence = (1 - pred) * 100
 
-            heatmap = gradcam(img_input)
-            if heatmap is not None:
-                heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
-                heatmap = np.uint8(255 * heatmap)
-                heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+            st.progress(int(confidence))
 
-                superimposed = heatmap * 0.4 + img
-                st.image(superimposed.astype("uint8"),
-                         caption="🔥 AI Focus Area",
-                         use_container_width=True)
+            if pred < 0.5:
+                result = "Tumor Detected"
+                st.error(f"{result} ❌ ({confidence:.2f}%)")
+            else:
+                result = "No Tumor"
+                st.success(f"{result} ✅ ({confidence:.2f}%)")
 
-            pdf_path = generate_pdf(result, confidence)
+        # 🔥 HEATMAP BACK (YOUR X-RAY FEATURE)
+        heatmap = gradcam(img_input)
+        if heatmap is not None:
+            heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+            heatmap = np.uint8(255 * heatmap)
+            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
-            with open(pdf_path, "rb") as f:
-                st.download_button("📄 Download Report", f, "report.pdf")
+            superimposed = heatmap * 0.4 + img
+            st.image(superimposed.astype("uint8"),
+                     caption="🔥 AI Tumor Focus Area",
+                     use_container_width=True)
 
-        except Exception as e:
-            st.error(f"❌ Processing error: {e}")
+        # PDF
+        pdf_path = generate_pdf(result, confidence)
+
+        with open(pdf_path, "rb") as f:
+            st.download_button("📄 Download Report", f, "report.pdf")

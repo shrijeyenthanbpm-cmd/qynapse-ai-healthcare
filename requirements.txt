@@ -1,8 +1,8 @@
-streamlit==1.55.0
-numpy==1.23.5
-opencv-python-headless==4.8.0.76
-tensorflow==2.15.0
-matplotlib==3.7.1
-requests==2.31.0
-reportlab==4.0.4
-h5py==3.8.0
+streamlit
+numpy
+opencv-python
+tensorflow
+keras
+matplotlib
+requests
+reportlab
